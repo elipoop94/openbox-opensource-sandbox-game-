@@ -1,0 +1,1 @@
+{"author":"You","description":"Example map mod. Copy this folder, rename it, edit maps/my_map/map.json.","enabled":true,"id":"my_map","name":"My Map","provides":["maps"],"version":"1.0.0"}

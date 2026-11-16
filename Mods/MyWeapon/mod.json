@@ -1,0 +1,1 @@
+{"author":"You","description":"Example weapon mod. See scripts/my_weapon.lua.","enabled":true,"id":"my_weapon","name":"My Weapon","provides":["weapons"],"version":"1.0.0"}

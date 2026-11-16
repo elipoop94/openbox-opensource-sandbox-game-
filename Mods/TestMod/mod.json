@@ -1,0 +1,1 @@
+{"author":"You","description":"Example disabled mod. Toggle it ON in MODS.","enabled":false,"id":"test_mod","name":"Test Mod","provides":["scripts"],"version":"0.1.0"}
