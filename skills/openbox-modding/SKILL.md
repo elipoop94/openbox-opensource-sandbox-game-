@@ -1,6 +1,6 @@
 ---
 name: openbox-modding
-description: Make mods for OpenBox, the small PC physics sandbox. Covers new maps, props, weapons, NPCs, tools, models, sounds and scripts via the Mods folder, mod.json, map.json and the OpenBox Lua API. Use when the user wants a new map, prop, weapon, NPC, tool, model, sound or script for OpenBox ("add a map to OpenBox", "make a weapon for OpenBox", "add a stickman / NPC to OpenBox").
+description: Make mods for OpenBox, the small PC physics sandbox. Covers new maps, props, weapons, NPCs, tools, models, sounds and scripts via the Mods folder, mod.json, map.json and the OpenBox Lua API. Also covers the in-game Map Builder and Community Maps publishing (v0.1.5): build a map inside the game and publish it for other players to download, 3 maps per week per device. Use when the user wants a new map, prop, weapon, NPC, tool, model, sound or script for OpenBox ("add a map to OpenBox", "make a weapon for OpenBox", "add a stickman / NPC to OpenBox").
 ---
 
 # OpenBox modding
@@ -139,6 +139,31 @@ Copy of `Mods/MyMap/maps/my_map/map.json` (pretty-printed, same values):
 
 To make a new map, copy `Mods/MyMap/`, rename the folder, change `mod.json` (`id`, `name`, `description`), rename `maps/my_map/` to `maps/<your_id>/`, and edit that `map.json`. Keep it simple: flat floor, a few walls, a few ramps, a spawn point.
 
+## Making maps inside the game — Map Builder (v0.1.5)
+
+No files needed. HOME → COMMUNITY MAPS → BUILD A MAP:
+
+1. Name the map.
+2. Walk the flat arena. Pick a piece from the builder bar — wall, ramp, block, crate — and click in the arena to place it. One click places one piece. Undo removes the last piece.
+3. Set the spawn point.
+4. TEST PLAY loads the draft as a playable map so you can walk it before anyone else sees it.
+5. SAVE puts it in My Maps. You can come back and edit a saved map later; DELETE removes it.
+
+## Sharing maps — Community Maps (v0.1.5)
+
+Anyone can publish a map, no accounts, no approval. From My Maps, pick a saved map and PUBLISH. It goes on the community board (HOME → COMMUNITY MAPS), where other players can browse it by name, author, date and size, DOWNLOAD it into their Map Select under Community, and PLAY it. A map.json file can also be imported and published the same way.
+
+Rules for publishing — the game enforces all of these, so a map that breaks them is rejected with a plain message:
+
+- **3 maps per week, per device.** The count is stored on your device; there are no accounts, and the game says so on the screen. After 3 publishes in a week, publishing is blocked until the next week.
+- **Name max 40 characters, description max 120, author max 20.** Names, descriptions and author names are checked for bad words (including spaced-out and leetspeak forms) and for links — any URL (www, .com, .gg, discord, http, and similar) is rejected. Only letters, numbers, spaces and basic punctuation are allowed; HTML and emoji are rejected.
+- **Map size and shape limits:** the map file must be 64 KB or smaller, with at most 120 boxes, 40 ramps and 60 props. Only the fields in the map.json schema above are allowed — extra fields are stripped or rejected, so nothing can be hidden inside a map file.
+- **Community maps are single-player only.** Multiplayer stays on Sandbox.
+- **Downloaded maps are checked again before they load.** A map is data only — it can never run code — and a tampered file is rejected instead of loading.
+- **Report and Block Author:** every map on the board has a Report button (hides that map for you) and a Block Author option (hides all maps from that author for you). The game owner also keeps a ban list (`maps/blocked.json` on the site) that hides a map or author for everyone.
+
+To make a map people will actually play: keep it simple — flat floor, a few walls, a few ramps, a clear spawn — test-play it first, and give it a name that says what it is.
+
 ## Lua API
 
 Lua is the documented authoring format. The engine exposes one global, `OpenBox`. No build step.
@@ -192,6 +217,8 @@ Entity props: `name`, `health` (the example uses `50`), `ragdoll` (`true` for a 
 ## How to add each type
 
 ### Maps
+
+Two ways: build it in the game (Map Builder above — no files), or write the files:
 
 1. Copy `Mods/MyMap/` to `Mods/<YourMap>/`.
 2. Edit `mod.json` (`id`, `name`, `description`, `provides: ["maps"]`).
@@ -260,7 +287,7 @@ Base-game controls for testing: WASD move, Shift sprint, Space jump, mouse look 
 
 ## Rules
 
-- **Do NOT hard-code custom maps into the base game.** The base game only ships Sandbox (`Maps/sandbox/map.json`). Every other map is a mod in `Mods/`.
+- **Do NOT hard-code custom maps into the base game.** The base game ships Sandbox and City built in; Farm ships as a bundled mod. Every other map is a mod in `Mods/`, or a Community Map published from the in-game Map Builder.
 - **Keep mods small, one file one job.** One map per `map.json`, one weapon per script, one entity per registration.
 - **No multiplayer, vehicles, advanced AI, campaigns, quests, or crafting yet.** The foundation is engine + Sandbox + Glock 17 + stickman + physics + menus + settings + mod system.
 - **Desktop first.** VR is architecture-only: XR-enabled renderer + a WebXR (`navigator.xr`) support check, VR hands / grabbing / throwing / weapons later. Do not ship VR until desktop is stable.
