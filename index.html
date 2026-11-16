@@ -6,6 +6,82 @@
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#0b0d0f" />
     <meta name="mobile-web-app-capable" content="yes" />
+    <script>
+      /* VR app launch — EARLY session request. This runs in <head>,
+         before the game and its engine load, so on a VR launch
+         (?vr=1 in the URL, or standalone display mode — installed
+         PWA / TWA app launch) the immersive-vr session is requested
+         while the launch's user activation is still fresh, like a
+         native Quest game starting. There is NO tap prompt on this
+         path, ever: if a request fails, this script keeps retrying
+         on its own — every 500 ms for the first few seconds, then
+         every 2 s — and again whenever the page regains focus or
+         becomes visible, while only the dark ENTERING VR splash
+         shows. A granted session is held on window.__OB_VR_EARLY__
+         and adopted by the main game script the moment it boots
+         (see vrMaybeAutoEnter). Plain browser visits (no ?vr=1,
+         not standalone) skip all of this. */
+      (function(){
+        var wants = false;
+        try {
+          if (/[?&]vr=1(&|$)/.test(window.location.search || "")) wants = true;
+          if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) wants = true;
+          if (window.navigator.standalone === true) wants = true;
+        } catch(e){}
+        window.__OB_VR_LAUNCH__ = wants;
+        if (!wants) return;
+        try { document.documentElement.classList.add("vr-launch"); } catch(e){}
+        var E = window.__OB_VR_EARLY__ = {
+          session: null, requesting: false, done: false,
+          startedAt: Date.now(), timer: null, onSession: null
+        };
+        function attempts(){
+          /* Same Quest-compatible chain the game itself uses:
+             local-floor required, then all-optional, then bare. */
+          return [
+            { requiredFeatures: ["local-floor"], optionalFeatures: ["hand-tracking", "local"] },
+            { optionalFeatures: ["local-floor", "local", "hand-tracking"] },
+            { optionalFeatures: ["hand-tracking"] }
+          ];
+        }
+        function request(){
+          if (E.done || E.session || E.requesting) return;
+          if (!navigator.xr || !navigator.xr.requestSession) return;
+          E.requesting = true;
+          var list = attempts(), idx = 0;
+          (function next(){
+            if (idx >= list.length){ E.requesting = false; return; }
+            var opts = list[idx++];
+            var req;
+            try { req = navigator.xr.requestSession("immersive-vr", opts); }
+            catch(e){ next(); return; }
+            Promise.resolve(req).then(function(session){
+              E.requesting = false; E.session = session;
+              if (E.timer){ clearTimeout(E.timer); E.timer = null; }
+              if (typeof E.onSession === "function"){ try { E.onSession(session); } catch(e){} }
+            }).catch(next);
+          })();
+        }
+        function interval(){
+          return (Date.now() - E.startedAt < 4000) ? 500 : 2000;
+        }
+        function tick(){
+          E.timer = null;
+          if (E.done || E.session) return;
+          request();
+          E.timer = setTimeout(tick, interval());
+        }
+        E.request = request;
+        E.stop = function(){
+          E.done = true;
+          if (E.timer){ clearTimeout(E.timer); E.timer = null; }
+        };
+        document.addEventListener("visibilitychange", function(){ if (!document.hidden) request(); });
+        window.addEventListener("focus", function(){ request(); });
+        request();
+        E.timer = setTimeout(tick, interval());
+      })();
+    </script>
     <link rel="manifest" href="manifest.json" />
     <link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAAElUlEQVR4nO3dzVEbQRCG4cFlLgaKVJwDaZCDQ3ARgnMgDXJwMMYXLj40NZ4arYTQJ+32z/scOS3Uq+nWbiFd3dzdN+BUX7a+AMRGQJAQECQEBAkBQUJAkBAQJAQECQFBQkCQEBAkBAQJAUFCQJAQECQEBAkBQUJAkBAQJAQECQFBQkCQEBAkBAQJAUFCQJAQECQEBAkBQUJAkBAQJAQECQFBQkCQEBAkBAQJAUFCQJAQECQEBAkBQUJAkBAQJAT0gT8/b7a+BNcI6BCrh4YOuOLbehYtRnP79Lr+lThHQLMPzxsyGhHQf8ePKhrqCOjdCYsOGTUCavKOXDyj0gGd8e1V2YyKBnSJd+Y1G6oY0EXv61TLqFZAq90SrJNRlYDWv5tcpKESAW34LCJ9RskDcvIYK3FGaQNykk6XtaGEAXlLZ5Qvo2wBea6ny5RRnoBCpNOlaShDQLHSGSXIKHxAcevpQmcUOKAE6XRxGwoZUKZ0RhEzChZQ1nRGsTKKFFCFerooGcUIqFQ6XYiGvAdUM52R84z8BkQ6I7cZOf3PVOqZuP2DOA3I7QsOE78jrDl+2a3M88vJXUAvj2+ttYfn6/6TyhmN6fz4/re19uv3t+0uZ4HTEWYZmdunV88vwQuZfmurx6GvW1/AXtNRZH/NIqdRiHSM34DMbka5GwqUjvEekBkzynoUhUvHxAjIZM1o2vAC1dNiBWReHt8yLUZBD54uXkAty34dPR0TMiATd7/OkY4JHJCJtRiFXncWhQ/IhFiMMh08XZKAmu/FKGU6Jk9AxltGidMxTp+FiV4e36anaetfQ5SHWaJsJ9Bow/26Qjomc0Bm5f26Tjomf0BtrcWoWjom5w606HKLUZF1Z1GJE2h09sWobDqmXEDmLBkVT8cUDcicvF+TTlc6oPb5/TrfwyxR9YDMkQ/2OXh2EdB/BxYj0tmHgGa7i1FHOrsK3Qc63nTHyFDPIgLaa2yIevYhIEgICBICgoSAICEgSAgIEgKChIAgISBICAgSAoKEgCAhIEgICBICgoSAICEgSAgIEgKChIAgISBICAgSAoKEgCAhIEgICBICgsTdp3PYJ2PsfrYBvH1fs3F6Ao1f+43mtZ7m8ATqOIqM23SM34BM5Yycp2OcjrDJw/N1taEWop7m/wQaPTxfVziKoqRjIgXUsk+0WOmYYAGZfBlFTMfE2IEWpVmM4tbTgp5Ao9CLUeh0TPiAWsyJliAdE3iETQJNtDT1tBwn0Mj5RMuUjskWUPM60fKlY/KMsImriZa1npbyBBptfholTsckD8hsshilT8ekHWGTlSdakXpakROoW2Gi1UnH1ArIXGiiVUvHVBlhk7NPtJr1tJonUHeWiVY2HVM6IHNyRsXTMQT07lOLEel0RXegRUcuRtQz4gSaHZhopLPr6ubufutrQGCMMEgICBICgoSAICEgSAgIEgKChIAgISBICAgSAoKEgCAhIEgICBICgoSAICEgSAgIEgKChIAgISBICAgSAoKEgCAhIEgICBICgoSAICEgSAgIEgKChIAgISBICAgSAoKEgCAhIEj+AT5rslZ9xYzDAAAAAElFTkSuQmCC" />
     <link rel="apple-touch-icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAAElUlEQVR4nO3dzVEbQRCG4cFlLgaKVJwDaZCDQ3ARgnMgDXJwMMYXLj40NZ4arYTQJ+32z/scOS3Uq+nWbiFd3dzdN+BUX7a+AMRGQJAQECQEBAkBQUJAkBAQJAQECQFBQkCQEBAkBAQJAUFCQJAQECQEBAkBQUJAkBAQJAQECQFBQkCQEBAkBAQJAUFCQJAQECQEBAkBQUJAkBAQJAQECQFBQkCQEBAkBAQJAUFCQJAQECQEBAkBQUJAkBAQJAT0gT8/b7a+BNcI6BCrh4YOuOLbehYtRnP79Lr+lThHQLMPzxsyGhHQf8ePKhrqCOjdCYsOGTUCavKOXDyj0gGd8e1V2YyKBnSJd+Y1G6oY0EXv61TLqFZAq90SrJNRlYDWv5tcpKESAW34LCJ9RskDcvIYK3FGaQNykk6XtaGEAXlLZ5Qvo2wBea6ny5RRnoBCpNOlaShDQLHSGSXIKHxAcevpQmcUOKAE6XRxGwoZUKZ0RhEzChZQ1nRGsTKKFFCFerooGcUIqFQ6XYiGvAdUM52R84z8BkQ6I7cZOf3PVOqZuP2DOA3I7QsOE78jrDl+2a3M88vJXUAvj2+ttYfn6/6TyhmN6fz4/re19uv3t+0uZ4HTEWYZmdunV88vwQuZfmurx6GvW1/AXtNRZH/NIqdRiHSM34DMbka5GwqUjvEekBkzynoUhUvHxAjIZM1o2vAC1dNiBWReHt8yLUZBD54uXkAty34dPR0TMiATd7/OkY4JHJCJtRiFXncWhQ/IhFiMMh08XZKAmu/FKGU6Jk9AxltGidMxTp+FiV4e36anaetfQ5SHWaJsJ9Bow/26Qjomc0Bm5f26Tjomf0BtrcWoWjom5w606HKLUZF1Z1GJE2h09sWobDqmXEDmLBkVT8cUDcicvF+TTlc6oPb5/TrfwyxR9YDMkQ/2OXh2EdB/BxYj0tmHgGa7i1FHOrsK3Qc63nTHyFDPIgLaa2yIevYhIEgICBICgoSAICEgSAgIEgKChIAgISBICAgSAoKEgCAhIEgICBICgoSAICEgSAgIEgKChIAgISBICAgSAoKEgCAhIEgICBICgsTdp3PYJ2PsfrYBvH1fs3F6Ao1f+43mtZ7m8ATqOIqM23SM34BM5Yycp2OcjrDJw/N1taEWop7m/wQaPTxfVziKoqRjIgXUsk+0WOmYYAGZfBlFTMfE2IEWpVmM4tbTgp5Ao9CLUeh0TPiAWsyJliAdE3iETQJNtDT1tBwn0Mj5RMuUjskWUPM60fKlY/KMsImriZa1npbyBBptfholTsckD8hsshilT8ekHWGTlSdakXpakROoW2Gi1UnH1ArIXGiiVUvHVBlhk7NPtJr1tJonUHeWiVY2HVM6IHNyRsXTMQT07lOLEel0RXegRUcuRtQz4gSaHZhopLPr6ubufutrQGCMMEgICBICgoSAICEgSAgIEgKChIAgISBICAgSAoKEgCAhIEgICBICgoSAICEgSAgIEgKChIAgISBICAgSAoKEgCAhIEgICBICgoSAICEgSAgIEgKChIAgISBICAgSAoKEgCAhIEj+AT5rslZ9xYzDAAAAAElFTkSuQmCC" />
@@ -316,34 +392,36 @@
       #btn-update-badge{ border-color:var(--accent); color:var(--accent-hi); }
       /* VR app launch (?vr=1 in the URL, or standalone display mode —
          installed PWA / TWA): the flat home screen is NEVER shown.
-         An early inline script adds html.vr-launch before the home
-         screen is even parsed, this CSS hides every flat screen, and
-         the only thing on screen is the dark ENTERING VR splash —
-         or, when the browser demands a user gesture first, the one
-         full-screen TAP TO ENTER VR button inside it. */
+         The early inline script in <head> adds html.vr-launch before
+         the home screen is even parsed and requests the VR session
+         right away; this CSS hides every flat screen, and the only
+         thing on screen while the launch retries run is the dark
+         ENTERING VR splash. There is no tap prompt on this path. */
       #vr-splash{ position:fixed; inset:0; z-index:200; display:none; align-items:center; justify-content:center; background:#0b0d0f; color:var(--text); text-align:center; padding:24px; }
       html.vr-launch #vr-splash{ display:flex; }
       html.vr-launch .screen{ display:none !important; }
       #vr-splash .vr-splash-text{ font-family:var(--head); font-weight:700; font-size:clamp(30px,7vw,54px); letter-spacing:.22em; }
-      #vr-splash.show-tap .vr-splash-text{ display:none; }
-      #vr-splash-tap{ position:absolute; inset:0; width:100%; height:100%; border:0; background:#0b0d0f; color:var(--text);
-        font-family:var(--head); font-weight:700; font-size:clamp(30px,7vw,54px); letter-spacing:.22em; }
-      #vr-splash-tap:hover,#vr-splash-tap:focus-visible{ background:#12161b; color:var(--accent-hi); outline:none; }
     </style>
   </head>
   <body>
     <!-- VR app launch splash: shown immediately (before the flat
          home screen can paint) when this launch wants VR — ?vr=1 in
-         the URL or standalone display mode. The inline script below
-         runs before the screens further down are parsed and flags
-         the document, so the flat home never appears on this path. -->
+         the URL or standalone display mode. The early script in
+         <head> already flagged the document and requested the VR
+         session, so the flat home never appears on this path and
+         this splash is all that shows until the session starts. -->
     <div id="vr-splash" role="status" aria-live="polite">
       <div class="vr-splash-text" id="vr-splash-text">ENTERING VR...</div>
-      <button id="vr-splash-tap" class="hidden" type="button">TAP TO ENTER VR</button>
     </div>
     <script>
+      /* Safeguard only: the <head> script normally sets this flag
+         (and starts the session request). If it somehow did not
+         run, derive the launch flag here — before the screens
+         further down are parsed — so the flat home still never
+         paints on a VR launch. */
       (function(){
         try {
+          if (typeof window.__OB_VR_LAUNCH__ !== "undefined") return;
           var wants = false;
           if (/[?&]vr=1(&|$)/.test(window.location.search || "")) wants = true;
           if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) wants = true;
@@ -4187,13 +4265,14 @@ window.addEventListener("resize", function(){
      session and returns to the flat home screen.
    - Launched as the VR app (?vr=1 in the URL — the manifest
      start_url carries it — or display-mode: standalone) the game
-     NEVER shows the flat home screen: a dark ENTERING VR splash
-     is up from the first paint, the session is requested right
-     away on load and again on the first user activation anywhere
-     (plus a short-delay retry), and a gesture refusal swaps the
-     splash to one single full-screen TAP TO ENTER VR button.
-     A started session lands straight in the 3D menu. Plain
-     browser visits keep the flat home + ENTER VR path.
+     NEVER shows the flat home screen and NEVER shows a tap
+     prompt: a dark ENTERING VR splash is up from the first paint,
+     an early script in <head> requests the session before the
+     game even boots, and failed requests retry automatically
+     (every 500 ms at first, then every 2 s, plus on focus /
+     visibility return) until one lands. A started session lands
+     straight in the 3D menu. Plain browser visits keep the flat
+     home + ENTER VR path.
    - Session: immersive-vr only. First request asks for
      requiredFeatures ["local-floor"] + optional hand-tracking;
      if the device refuses, it retries with everything optional,
@@ -4230,10 +4309,11 @@ var VR = {
   menuView: "home", menuItems: [], menuRects: [], menuHoverKey: null,
   autoTried: false, autoBlocked: false,
   /* VR app launch (?vr=1 / standalone): launchMode means the flat
-     home is never shown — splash / TAP fallback only, until a
+     home is never shown — the ENTERING VR splash only, until a
      session starts. requesting guards against duplicate session
-     requests from the load attempt + activation retry racing. */
-  launchMode: false, requesting: false, tapShown: false, launchActivation: null,
+     requests from the early <head> request + the retry loop. */
+  launchMode: false, requesting: false,
+  launchRetryTimer: null, launchRetryStartedAt: 0, launchRetryHandler: null,
   left: vrSideState(), right: vrSideState(),
   slotSide: [null, null],
   panelMode: null, panelItems: [], panelRects: [], panelHover: -1,
@@ -4341,6 +4421,19 @@ function vrRequestSession(){
     vrUpdateStatusLine(false);
     return;
   }
+  /* VR app launch: the early <head> script is already requesting
+     (or already holds) the session — adopt its result instead of
+     starting a competing request. Its retry loop keeps running
+     until a session lands, so a refusal here is never final and
+     no tap prompt is ever needed. */
+  var early = null;
+  try { early = window.__OB_VR_EARLY__ || null; } catch(e){}
+  if (early && VR.launchMode && !early.done){
+    early.onSession = function(s){ if (!VR.session && !VR.active) vrOnSessionGranted(s); };
+    if (early.session){ vrOnSessionGranted(early.session); return; }
+    if (!early.requesting) early.request();
+    return;
+  }
   VR.requesting = true;
   var attempts = [
     { requiredFeatures: ["local-floor"], optionalFeatures: ["hand-tracking", "local"] },
@@ -4352,14 +4445,14 @@ function vrRequestSession(){
     if (err) lastErr = err;
     if (idx >= attempts.length){
       VR.requesting = false;
-      /* Blocked launch-time requests (no user activation) are
-         remembered so the first tap anywhere can retry — see
-         vrMaybeAutoEnter. On the VR-app launch path ANY total
-         failure swaps the splash to the single full-screen
-         TAP TO ENTER VR button — never the flat home. Everything
-         else is a plain failure on the flat screen. */
+      /* On the VR-app launch path a total failure is never shown
+         to the player and never falls back to the flat home or to
+         any tap prompt: the ENTERING VR splash stays up and the
+         launch retry loop (vrScheduleLaunchRetry, plus the early
+         <head> script's own retries) requests again on its own.
+         Everything else is a plain failure on the flat screen. */
       if (lastErr && lastErr.name === "NotAllowedError") VR.autoBlocked = true;
-      if (VR.launchMode){ vrShowTapFallback(); return; }
+      if (VR.launchMode){ vrScheduleLaunchRetry(); return; }
       toast("VR could not start on this device (" + (lastErr && lastErr.name ? lastErr.name : "error") + ") — staying on the flat screen. Tap ENTER VR to try again.");
       return;
     }
@@ -4373,6 +4466,12 @@ function vrRequestSession(){
 }
 function vrOnSessionGranted(session){
   VR.requesting = false;
+  /* A session landed: the launch retry machinery — this script's
+     loop and the early <head> script's — is done. Marking the
+     early script done also means it will not start requesting
+     again on its own after this session ends. */
+  vrStopLaunchRetry();
+  try { var e0 = window.__OB_VR_EARLY__; if (e0 && e0.stop) e0.stop(); } catch(e){}
   VR.session = session;
   session.addEventListener("end", vrOnSessionEnd);
   session.addEventListener("inputsourceschange", vrOnInputSourcesChange);
@@ -4405,11 +4504,11 @@ function vrOnSessionGranted(session){
    the panels. Weapons are hidden: there is nothing to shoot in
    the menu, and a floating gun would block the panels. */
 function vrOnSessionStart(){
-  /* Session live: the launch splash goes away and the launch-time
-     activation retry listeners are done — from here the player is
-     in the 3D VR menu, exactly as a manual ENTER VR lands there. */
+  /* Session live: the launch splash goes away and the launch
+     retry loop is done — from here the player is in the 3D VR
+     menu, exactly as a manual ENTER VR lands there. */
   vrHideSplash();
-  vrRemoveLaunchActivation();
+  vrStopLaunchRetry();
   VR.mode = "menu"; VR.menuView = "home"; VR.menuHoverKey = null;
   VR.panelMode = null;
   if (worldGroup) worldGroup.visible = false;
@@ -4429,7 +4528,7 @@ function vrOnSessionEnd(){
   VR.active = false; VR.session = null; VR.pending = false; VR.mode = "off";
   /* The session is over: launch mode ends with it, so the flat
      home screen below can actually show again. */
-  VR.launchMode = false; VR.requesting = false; vrHideSplash(); vrRemoveLaunchActivation();
+  VR.launchMode = false; VR.requesting = false; vrHideSplash(); vrStopLaunchRetry();
   VR.panelMode = null; vrFireHeld = false; vrMove.f = 0; vrMove.r = 0; vrMove.sprint = false;
   document.body.classList.remove("vr-active");
   if (vrHudMesh) vrHudMesh.visible = false;
@@ -4487,22 +4586,20 @@ function vrStartGame(entry){
 /* Opens-in-VR — the VR app launch path. When the game is launched
    with ?vr=1 in the URL (the manifest start_url carries it) or in
    standalone display mode (installed PWA / TWA app launch), it
-   behaves like a Meta Store game: the flat home screen NEVER
-   shows. An early inline script (top of <body>) already flagged
-   html.vr-launch before the home screen was parsed, so all the
-   player has seen is the dark full-screen ENTERING VR splash.
-   This code then:
-   - requests the immersive-vr session right away on load,
-   - retries on the first user activation anywhere on the page
-     (any tap / click / key), and once more shortly after load if
-     the first attempt failed without reaching the tap fallback,
-   - and if a request is refused for lack of a user gesture, swaps
-     the splash to ONE single full-screen TAP TO ENTER VR button
-     and nothing else — that tap requests the session.
-   Once the session starts, vrOnSessionStart hides the splash and
-   the player lands straight in the 3D VR menu, as now. Plain
-   browser visits (no ?vr=1, not standalone) never enter this
-   path: they get the flat home with the ENTER VR button. */
+   behaves like a Meta Store game: it enters VR on its own, with
+   no tap prompt at any point, and the flat home screen NEVER
+   shows. An early inline script in <head> flags html.vr-launch
+   before anything paints and requests the immersive-vr session
+   immediately — before the game finishes booting — retrying on
+   its own (every 500 ms at first, then every 2 s, and whenever
+   the page regains focus or visibility) while only the dark
+   ENTERING VR splash is on screen. This code adopts that session
+   (or requests one itself if the early script did not run) and
+   keeps the same automatic retries going until a session starts.
+   Once it starts, vrOnSessionStart hides the splash and the
+   player lands straight in the 3D VR menu, as now. Plain browser
+   visits (no ?vr=1, not standalone) never enter this path: they
+   get the flat home with the ENTER VR button. */
 function vrWantsAutoEnter(){
   try { if (window.__OB_VR_LAUNCH__) return true; } catch(e){}
   try { if (/[?&]vr=1(&|$)/.test(window.location.search || "")) return true; } catch(e){}
@@ -4510,89 +4607,97 @@ function vrWantsAutoEnter(){
   try { if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true; } catch(e){}
   return false;
 }
-/* Splash, entering state: dark screen, ENTERING VR... only. All
+/* Splash: dark screen, ENTERING VR... only — the one and only
+   thing a VR launch ever shows before the session starts. All
    flat screens are deactivated so nothing else can surface. */
 function vrShowSplash(){
-  VR.launchMode = true; VR.tapShown = false;
+  VR.launchMode = true;
   try { document.documentElement.classList.add("vr-launch"); } catch(e){}
-  var s = $("vr-splash"); if (s){ s.classList.remove("hidden"); s.classList.remove("show-tap"); }
-  var t = $("vr-splash-tap"); if (t) t.classList.add("hidden");
-  var tx = $("vr-splash-text"); if (tx) tx.classList.remove("hidden");
-  Object.keys(screens).forEach(function(k){ $(screens[k]).classList.remove("active"); });
-}
-/* Splash, tap fallback: the ONLY thing on screen is the single
-   full-screen TAP TO ENTER VR button — no menus, no flat home. */
-function vrShowTapFallback(){
-  VR.launchMode = true; VR.tapShown = true; VR.autoBlocked = true;
-  try { document.documentElement.classList.add("vr-launch"); } catch(e){}
-  var s = $("vr-splash"); if (s){ s.classList.remove("hidden"); s.classList.add("show-tap"); }
-  var t = $("vr-splash-tap"); if (t) t.classList.remove("hidden");
-  var tx = $("vr-splash-text"); if (tx) tx.classList.add("hidden");
+  var s = $("vr-splash"); if (s) s.classList.remove("hidden");
   Object.keys(screens).forEach(function(k){ $(screens[k]).classList.remove("active"); });
 }
 function vrHideSplash(){
-  var s = $("vr-splash"); if (s){ s.classList.add("hidden"); s.classList.remove("show-tap"); }
+  var s = $("vr-splash"); if (s) s.classList.add("hidden");
   try { document.documentElement.classList.remove("vr-launch"); } catch(e){}
 }
 /* Escape hatch for a launch device with no WebXR at all: drop
    launch mode and land on the flat home (vrRequestSession's
    no-WebXR branch explains why via toast). */
 function vrExitLaunchToHome(){
-  VR.launchMode = false; VR.tapShown = false;
-  vrHideSplash(); vrRemoveLaunchActivation();
+  VR.launchMode = false;
+  vrHideSplash(); vrStopLaunchRetry();
+  try { var e1 = window.__OB_VR_EARLY__; if (e1 && e1.stop) e1.stop(); } catch(e){}
   showScreen("home");
 }
-function vrRemoveLaunchActivation(){
-  if (!VR.launchActivation) return;
-  var h = VR.launchActivation; VR.launchActivation = null;
-  document.removeEventListener("pointerdown", h, true);
-  document.removeEventListener("click", h, true);
-  document.removeEventListener("keydown", h, true);
-  document.removeEventListener("touchend", h, true);
+/* Launch retry loop: while launch mode is waiting for a session,
+   request again on a short interval — every 500 ms for the first
+   few seconds, then every 2 s — for as long as it takes. The
+   ENTERING VR splash stays on screen the whole time; there is no
+   tap prompt and no fallback to the flat home. The early <head>
+   script runs the same loop from page load; this one takes over
+   once the game has booted, and vrRequestSession defers to
+   whichever request is already in flight, so the two never
+   double-request. */
+function vrScheduleLaunchRetry(){
+  if (VR.launchRetryTimer || !VR.launchMode) return;
+  if (!VR.launchRetryStartedAt) VR.launchRetryStartedAt = Date.now();
+  var tick = function(){
+    VR.launchRetryTimer = null;
+    if (!VR.launchMode || VR.active || VR.session) return;
+    if (!VR.requesting) vrRequestSession();
+    if (!VR.launchMode || VR.active || VR.session) return;
+    var elapsed = Date.now() - VR.launchRetryStartedAt;
+    VR.launchRetryTimer = setTimeout(tick, elapsed < 4000 ? 500 : 2000);
+  };
+  var elapsed0 = Date.now() - VR.launchRetryStartedAt;
+  VR.launchRetryTimer = setTimeout(tick, elapsed0 < 4000 ? 500 : 2000);
+}
+function vrStopLaunchRetry(){
+  if (VR.launchRetryTimer){ clearTimeout(VR.launchRetryTimer); VR.launchRetryTimer = null; }
+  VR.launchRetryStartedAt = 0;
+  if (VR.launchRetryHandler){
+    var h = VR.launchRetryHandler; VR.launchRetryHandler = null;
+    document.removeEventListener("visibilitychange", h);
+    window.removeEventListener("focus", h);
+  }
 }
 function vrMaybeAutoEnter(){
   if (!vrWantsAutoEnter()) return;
   /* Launch mode from the first moment the main script runs: the
-     splash is up (the early script + CSS already ensured the flat
-     home never painted) and stays up until a session starts. */
+     splash is up (the early <head> script + CSS already ensured
+     the flat home never painted) and stays up until a session
+     starts — there is no other screen on this path. */
   vrShowSplash();
   if (VR.autoTried) return;
   VR.autoTried = true;
-  /* The TAP TO ENTER VR button itself requests the session. The
-     document-level activation handler below also fires for this
-     tap; vrRequestSession's requesting guard keeps it to one
-     request. */
-  var tapBtn = $("vr-splash-tap");
-  if (tapBtn && !tapBtn.__obBound){
-    tapBtn.__obBound = true;
-    tapBtn.addEventListener("click", function(){ VR.autoBlocked = false; vrRequestSession(); });
+  /* The early <head> script requested the session before this
+     game code even loaded: if it already holds a session, adopt
+     it now; if its request is still in flight, adopt it the
+     moment it lands. */
+  var early = null;
+  try { early = window.__OB_VR_EARLY__ || null; } catch(e){}
+  if (early){
+    early.onSession = function(s){ if (!VR.session && !VR.active) vrOnSessionGranted(s); };
+    if (early.session){ vrOnSessionGranted(early.session); return; }
   }
-  /* First user activation ANYWHERE on the page (any tap / click /
-     key) retries the session request — this is what turns a
-     gesture-blocked load-time attempt into a session. Listeners
-     stay until the session starts (vrOnSessionStart removes
-     them), so a failed activation attempt can simply be tapped
-     again; the requesting guard prevents duplicates. */
-  var onActivation = function(){
-    if (VR.active || VR.session || VR.requesting) return;
-    VR.autoBlocked = false;
+  /* Regaining focus or becoming visible retries the request at
+     once; the interval loop below is the steady-state retry.
+     Both run until the session starts (vrOnSessionStart /
+     vrStopLaunchRetry remove them). */
+  var onRetry = function(){
+    if (typeof document !== "undefined" && document.hidden) return;
+    if (!VR.launchMode || VR.active || VR.session || VR.requesting) return;
     vrRequestSession();
+    vrScheduleLaunchRetry();
   };
-  VR.launchActivation = onActivation;
-  document.addEventListener("pointerdown", onActivation, true);
-  document.addEventListener("click", onActivation, true);
-  document.addEventListener("keydown", onActivation, true);
-  document.addEventListener("touchend", onActivation, true);
-  /* Request the session right away on load — no waiting for a
-     support probe or a gesture first. */
+  VR.launchRetryHandler = onRetry;
+  document.addEventListener("visibilitychange", onRetry);
+  window.addEventListener("focus", onRetry);
+  /* Request now — this defers to the early script's in-flight
+     request when there is one — and keep retrying automatically
+     until a session starts. No tap is ever asked for. */
   vrRequestSession();
-  /* One retry shortly after load if the first attempt already
-     failed and did not reach the tap fallback (e.g. a transient
-     refusal): if the TAP button is showing instead, the retry is
-     the player's tap, so this does nothing. */
-  setTimeout(function(){
-    if (VR.launchMode && !VR.active && !VR.session && !VR.requesting && !VR.tapShown) vrRequestSession();
-  }, 900);
+  vrScheduleLaunchRetry();
 }
 /* The home-screen VR status line: says plainly whether this
    browser can go VR, and what to do when it cannot. */
@@ -5644,10 +5749,12 @@ renderer.setAnimationLoop(animate);
 /* Opens-in-VR: refresh the status line now that PWA standalone is
    known, then — for a VR app launch (?vr=1 URL or standalone) —
    vrMaybeAutoEnter puts the ENTERING VR splash up (the early
-   script + CSS already kept the flat home from ever painting),
-   requests the session immediately and lands in the 3D VR menu;
-   a gesture refusal shows the single TAP TO ENTER VR button
-   instead — this path never falls back to the flat home. */
+   <head> script + CSS already kept the flat home from ever
+   painting), adopts the session the early script requested
+   before boot (or requests one itself) and lands in the 3D VR
+   menu; failed requests keep retrying automatically behind the
+   splash — this path never shows a tap prompt and never falls
+   back to the flat home. */
 if (navigator.xr && navigator.xr.isSessionSupported){
   navigator.xr.isSessionSupported("immersive-vr").then(function(ok){ vrUpdateStatusLine(ok); }).catch(function(){});
 }
