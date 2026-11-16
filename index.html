@@ -314,9 +314,45 @@
       #vr-status b{ color:var(--accent-hi); font-weight:600; }
       #quest-install-help{ color:var(--dim); font-size:12.5px; line-height:1.65; width:min(340px,100%); margin-top:14px; }
       #btn-update-badge{ border-color:var(--accent); color:var(--accent-hi); }
+      /* VR app launch (?vr=1 in the URL, or standalone display mode —
+         installed PWA / TWA): the flat home screen is NEVER shown.
+         An early inline script adds html.vr-launch before the home
+         screen is even parsed, this CSS hides every flat screen, and
+         the only thing on screen is the dark ENTERING VR splash —
+         or, when the browser demands a user gesture first, the one
+         full-screen TAP TO ENTER VR button inside it. */
+      #vr-splash{ position:fixed; inset:0; z-index:200; display:none; align-items:center; justify-content:center; background:#0b0d0f; color:var(--text); text-align:center; padding:24px; }
+      html.vr-launch #vr-splash{ display:flex; }
+      html.vr-launch .screen{ display:none !important; }
+      #vr-splash .vr-splash-text{ font-family:var(--head); font-weight:700; font-size:clamp(30px,7vw,54px); letter-spacing:.22em; }
+      #vr-splash.show-tap .vr-splash-text{ display:none; }
+      #vr-splash-tap{ position:absolute; inset:0; width:100%; height:100%; border:0; background:#0b0d0f; color:var(--text);
+        font-family:var(--head); font-weight:700; font-size:clamp(30px,7vw,54px); letter-spacing:.22em; }
+      #vr-splash-tap:hover,#vr-splash-tap:focus-visible{ background:#12161b; color:var(--accent-hi); outline:none; }
     </style>
   </head>
   <body>
+    <!-- VR app launch splash: shown immediately (before the flat
+         home screen can paint) when this launch wants VR — ?vr=1 in
+         the URL or standalone display mode. The inline script below
+         runs before the screens further down are parsed and flags
+         the document, so the flat home never appears on this path. -->
+    <div id="vr-splash" role="status" aria-live="polite">
+      <div class="vr-splash-text" id="vr-splash-text">ENTERING VR...</div>
+      <button id="vr-splash-tap" class="hidden" type="button">TAP TO ENTER VR</button>
+    </div>
+    <script>
+      (function(){
+        try {
+          var wants = false;
+          if (/[?&]vr=1(&|$)/.test(window.location.search || "")) wants = true;
+          if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) wants = true;
+          if (window.navigator.standalone === true) wants = true;
+          window.__OB_VR_LAUNCH__ = wants;
+          if (wants) document.documentElement.classList.add("vr-launch");
+        } catch(e){}
+      })();
+    </script>
     <div id="game"></div>
     <div id="load-error" class="hidden">OpenBox could not load its 3D engine (Three.js).<br/>Check your connection and reload the page.</div>
 
@@ -4149,12 +4185,15 @@ window.addEventListener("resize", function(){
      from a game returns to the 3D menu, NOT to the flat page.
      QUIT in the menu (or the Quest system button) ends the
      session and returns to the flat home screen.
-   - Launched as the installed VR app (display-mode: standalone —
-     the manifest start_url carries ?vr=1) the game tries to enter
-     the session on load and land straight in the 3D menu. If the
-     browser refuses the launch-time request (no user activation),
-     the first tap anywhere retries it, and ENTER VR stays as the
-     manual path — plain message, no crash, no black screen.
+   - Launched as the VR app (?vr=1 in the URL — the manifest
+     start_url carries it — or display-mode: standalone) the game
+     NEVER shows the flat home screen: a dark ENTERING VR splash
+     is up from the first paint, the session is requested right
+     away on load and again on the first user activation anywhere
+     (plus a short-delay retry), and a gesture refusal swaps the
+     splash to one single full-screen TAP TO ENTER VR button.
+     A started session lands straight in the 3D menu. Plain
+     browser visits keep the flat home + ENTER VR path.
    - Session: immersive-vr only. First request asks for
      requiredFeatures ["local-floor"] + optional hand-tracking;
      if the device refuses, it retries with everything optional,
@@ -4190,6 +4229,11 @@ var VR = {
   mode: "off",
   menuView: "home", menuItems: [], menuRects: [], menuHoverKey: null,
   autoTried: false, autoBlocked: false,
+  /* VR app launch (?vr=1 / standalone): launchMode means the flat
+     home is never shown — splash / TAP fallback only, until a
+     session starts. requesting guards against duplicate session
+     requests from the load attempt + activation retry racing. */
+  launchMode: false, requesting: false, tapShown: false, launchActivation: null,
   left: vrSideState(), right: vrSideState(),
   slotSide: [null, null],
   panelMode: null, panelItems: [], panelRects: [], panelHover: -1,
@@ -4287,12 +4331,17 @@ function updatePlayerVR(dt){
    (no WebGPU XR, nothing experimental). Any total failure is a
    plain toast on the flat screen — never a crash, never a hang. */
 function vrRequestSession(){
-  if (VR.session || VR.active) return; /* a session is already live */
+  if (VR.session || VR.active || VR.requesting) return; /* a session is live, or a request is already in flight */
   if (!navigator.xr || !navigator.xr.requestSession){
+    /* No WebXR at all: on the VR-app launch path there is no VR to
+       enter, so release the splash to the flat home with the plain
+       explanation instead of trapping the player on a dead splash. */
+    if (VR.launchMode) vrExitLaunchToHome();
     toast("WebXR is not available in this browser, so no VR session can start. Open OpenBox in the Meta Quest Browser on a Quest 2, 3 or 3S — or install it as the VR app — to play in VR.");
     vrUpdateStatusLine(false);
     return;
   }
+  VR.requesting = true;
   var attempts = [
     { requiredFeatures: ["local-floor"], optionalFeatures: ["hand-tracking", "local"] },
     { optionalFeatures: ["local-floor", "local", "hand-tracking"] },
@@ -4302,10 +4351,15 @@ function vrRequestSession(){
   function tryNext(err){
     if (err) lastErr = err;
     if (idx >= attempts.length){
+      VR.requesting = false;
       /* Blocked launch-time requests (no user activation) are
          remembered so the first tap anywhere can retry — see
-         vrMaybeAutoEnter. Everything else is a plain failure. */
+         vrMaybeAutoEnter. On the VR-app launch path ANY total
+         failure swaps the splash to the single full-screen
+         TAP TO ENTER VR button — never the flat home. Everything
+         else is a plain failure on the flat screen. */
       if (lastErr && lastErr.name === "NotAllowedError") VR.autoBlocked = true;
+      if (VR.launchMode){ vrShowTapFallback(); return; }
       toast("VR could not start on this device (" + (lastErr && lastErr.name ? lastErr.name : "error") + ") — staying on the flat screen. Tap ENTER VR to try again.");
       return;
     }
@@ -4318,6 +4372,7 @@ function vrRequestSession(){
   tryNext(null);
 }
 function vrOnSessionGranted(session){
+  VR.requesting = false;
   VR.session = session;
   session.addEventListener("end", vrOnSessionEnd);
   session.addEventListener("inputsourceschange", vrOnInputSourcesChange);
@@ -4350,6 +4405,11 @@ function vrOnSessionGranted(session){
    the panels. Weapons are hidden: there is nothing to shoot in
    the menu, and a floating gun would block the panels. */
 function vrOnSessionStart(){
+  /* Session live: the launch splash goes away and the launch-time
+     activation retry listeners are done — from here the player is
+     in the 3D VR menu, exactly as a manual ENTER VR lands there. */
+  vrHideSplash();
+  vrRemoveLaunchActivation();
   VR.mode = "menu"; VR.menuView = "home"; VR.menuHoverKey = null;
   VR.panelMode = null;
   if (worldGroup) worldGroup.visible = false;
@@ -4367,6 +4427,9 @@ function vrOnSessionEnd(){
   if (VR.session) { try { VR.session.removeEventListener("end", vrOnSessionEnd); } catch(e){} }
   var wasGame = VR.mode === "game";
   VR.active = false; VR.session = null; VR.pending = false; VR.mode = "off";
+  /* The session is over: launch mode ends with it, so the flat
+     home screen below can actually show again. */
+  VR.launchMode = false; VR.requesting = false; vrHideSplash(); vrRemoveLaunchActivation();
   VR.panelMode = null; vrFireHeld = false; vrMove.f = 0; vrMove.r = 0; vrMove.sprint = false;
   document.body.classList.remove("vr-active");
   if (vrHudMesh) vrHudMesh.visible = false;
@@ -4421,32 +4484,115 @@ function vrStartGame(entry){
   AudioSys.init(); AudioSys.resume(); AudioSys.ui();
   startGame(entry);
 }
-/* Opens-in-VR: the installed VR app (display-mode: standalone, or
-   a ?vr=1 launch URL — the manifest start_url carries it) tries
-   to enter the session on load and land in the 3D menu. If the
-   browser demands a user gesture first (NotAllowedError), the
-   first pointerdown anywhere retries once — an app launch tap —
-   and ENTER VR remains as the always-available manual path. */
+/* Opens-in-VR — the VR app launch path. When the game is launched
+   with ?vr=1 in the URL (the manifest start_url carries it) or in
+   standalone display mode (installed PWA / TWA app launch), it
+   behaves like a Meta Store game: the flat home screen NEVER
+   shows. An early inline script (top of <body>) already flagged
+   html.vr-launch before the home screen was parsed, so all the
+   player has seen is the dark full-screen ENTERING VR splash.
+   This code then:
+   - requests the immersive-vr session right away on load,
+   - retries on the first user activation anywhere on the page
+     (any tap / click / key), and once more shortly after load if
+     the first attempt failed without reaching the tap fallback,
+   - and if a request is refused for lack of a user gesture, swaps
+     the splash to ONE single full-screen TAP TO ENTER VR button
+     and nothing else — that tap requests the session.
+   Once the session starts, vrOnSessionStart hides the splash and
+   the player lands straight in the 3D VR menu, as now. Plain
+   browser visits (no ?vr=1, not standalone) never enter this
+   path: they get the flat home with the ENTER VR button. */
 function vrWantsAutoEnter(){
+  try { if (window.__OB_VR_LAUNCH__) return true; } catch(e){}
   try { if (/[?&]vr=1(&|$)/.test(window.location.search || "")) return true; } catch(e){}
   try { if (typeof PWA !== "undefined" && PWA.standalone) return true; } catch(e){}
+  try { if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true; } catch(e){}
   return false;
 }
+/* Splash, entering state: dark screen, ENTERING VR... only. All
+   flat screens are deactivated so nothing else can surface. */
+function vrShowSplash(){
+  VR.launchMode = true; VR.tapShown = false;
+  try { document.documentElement.classList.add("vr-launch"); } catch(e){}
+  var s = $("vr-splash"); if (s){ s.classList.remove("hidden"); s.classList.remove("show-tap"); }
+  var t = $("vr-splash-tap"); if (t) t.classList.add("hidden");
+  var tx = $("vr-splash-text"); if (tx) tx.classList.remove("hidden");
+  Object.keys(screens).forEach(function(k){ $(screens[k]).classList.remove("active"); });
+}
+/* Splash, tap fallback: the ONLY thing on screen is the single
+   full-screen TAP TO ENTER VR button — no menus, no flat home. */
+function vrShowTapFallback(){
+  VR.launchMode = true; VR.tapShown = true; VR.autoBlocked = true;
+  try { document.documentElement.classList.add("vr-launch"); } catch(e){}
+  var s = $("vr-splash"); if (s){ s.classList.remove("hidden"); s.classList.add("show-tap"); }
+  var t = $("vr-splash-tap"); if (t) t.classList.remove("hidden");
+  var tx = $("vr-splash-text"); if (tx) tx.classList.add("hidden");
+  Object.keys(screens).forEach(function(k){ $(screens[k]).classList.remove("active"); });
+}
+function vrHideSplash(){
+  var s = $("vr-splash"); if (s){ s.classList.add("hidden"); s.classList.remove("show-tap"); }
+  try { document.documentElement.classList.remove("vr-launch"); } catch(e){}
+}
+/* Escape hatch for a launch device with no WebXR at all: drop
+   launch mode and land on the flat home (vrRequestSession's
+   no-WebXR branch explains why via toast). */
+function vrExitLaunchToHome(){
+  VR.launchMode = false; VR.tapShown = false;
+  vrHideSplash(); vrRemoveLaunchActivation();
+  showScreen("home");
+}
+function vrRemoveLaunchActivation(){
+  if (!VR.launchActivation) return;
+  var h = VR.launchActivation; VR.launchActivation = null;
+  document.removeEventListener("pointerdown", h, true);
+  document.removeEventListener("click", h, true);
+  document.removeEventListener("keydown", h, true);
+  document.removeEventListener("touchend", h, true);
+}
 function vrMaybeAutoEnter(){
-  if (VR.autoTried || !vrWantsAutoEnter()) return;
+  if (!vrWantsAutoEnter()) return;
+  /* Launch mode from the first moment the main script runs: the
+     splash is up (the early script + CSS already ensured the flat
+     home never painted) and stays up until a session starts. */
+  vrShowSplash();
+  if (VR.autoTried) return;
   VR.autoTried = true;
-  if (!navigator.xr || !navigator.xr.isSessionSupported) return;
-  navigator.xr.isSessionSupported("immersive-vr").then(function(ok){
-    if (!ok || VR.active) return;
+  /* The TAP TO ENTER VR button itself requests the session. The
+     document-level activation handler below also fires for this
+     tap; vrRequestSession's requesting guard keeps it to one
+     request. */
+  var tapBtn = $("vr-splash-tap");
+  if (tapBtn && !tapBtn.__obBound){
+    tapBtn.__obBound = true;
+    tapBtn.addEventListener("click", function(){ VR.autoBlocked = false; vrRequestSession(); });
+  }
+  /* First user activation ANYWHERE on the page (any tap / click /
+     key) retries the session request — this is what turns a
+     gesture-blocked load-time attempt into a session. Listeners
+     stay until the session starts (vrOnSessionStart removes
+     them), so a failed activation attempt can simply be tapped
+     again; the requesting guard prevents duplicates. */
+  var onActivation = function(){
+    if (VR.active || VR.session || VR.requesting) return;
+    VR.autoBlocked = false;
     vrRequestSession();
-    /* One retry on the first real tap, if the load-time request
-       was blocked for lack of user activation. */
-    var retry = function(){
-      document.removeEventListener("pointerdown", retry);
-      if (VR.autoBlocked && !VR.active){ VR.autoBlocked = false; vrRequestSession(); }
-    };
-    document.addEventListener("pointerdown", retry);
-  }).catch(function(){});
+  };
+  VR.launchActivation = onActivation;
+  document.addEventListener("pointerdown", onActivation, true);
+  document.addEventListener("click", onActivation, true);
+  document.addEventListener("keydown", onActivation, true);
+  document.addEventListener("touchend", onActivation, true);
+  /* Request the session right away on load — no waiting for a
+     support probe or a gesture first. */
+  vrRequestSession();
+  /* One retry shortly after load if the first attempt already
+     failed and did not reach the tap fallback (e.g. a transient
+     refusal): if the TAP button is showing instead, the retry is
+     the player's tap, so this does nothing. */
+  setTimeout(function(){
+    if (VR.launchMode && !VR.active && !VR.session && !VR.requesting && !VR.tapShown) vrRequestSession();
+  }, 900);
 }
 /* The home-screen VR status line: says plainly whether this
    browser can go VR, and what to do when it cannot. */
@@ -5496,10 +5642,12 @@ state = "menu";
 $("hud").classList.add("hidden");
 renderer.setAnimationLoop(animate);
 /* Opens-in-VR: refresh the status line now that PWA standalone is
-   known, then — for an installed-app launch or a ?vr=1 URL — try
-   to enter the immersive session immediately and land in the 3D
-   VR menu. Failure falls back to this flat home screen with the
-   ENTER VR button (vrMaybeAutoEnter / vrRequestSession). */
+   known, then — for a VR app launch (?vr=1 URL or standalone) —
+   vrMaybeAutoEnter puts the ENTERING VR splash up (the early
+   script + CSS already kept the flat home from ever painting),
+   requests the session immediately and lands in the 3D VR menu;
+   a gesture refusal shows the single TAP TO ENTER VR button
+   instead — this path never falls back to the flat home. */
 if (navigator.xr && navigator.xr.isSessionSupported){
   navigator.xr.isSessionSupported("immersive-vr").then(function(ok){ vrUpdateStatusLine(ok); }).catch(function(){});
 }
